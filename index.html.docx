@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Manager App</title>
+    <script src="https://tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body class="bg-slate-50 min-h-screen font-sans flex items-center justify-center p-4">
+
+    <!-- Auth View Container -->
+    <div id="authContainer" class="w-full max-w-md bg-white p-6 rounded-xl shadow-md">
+        <h2 class="text-2xl font-bold text-center text-slate-800 mb-6">Welcome to TaskManager</h2>
+        <form id="authForm" class="space-y-4">
+            <input type="email" id="email" placeholder="Enter Email" required class="w-full px-4 py-2 border rounded-lg focus:outline-blue-500">
+            <input type="password" id="password" placeholder="Enter Password" required class="w-full px-4 py-2 border rounded-lg focus:outline-blue-500">
+            <button type="submit" class="w-full bg-blue-600 text-white font-medium py-2 rounded-lg hover:bg-blue-700 transition">Continue</button>
+        </form>
+    </div>
+
+    <!-- Main Application Interface -->
+    <div id="appContainer" class="hidden w-full max-w-2xl bg-white p-6 rounded-xl shadow-md">
+        <div class="flex justify-between items-center mb-6">
+            <h1 class="text-2xl font-bold text-slate-800">My Workspace <span class="text-sm font-normal text-emerald-600">(Live Sync 🟢)</span></h1>
+            <button id="logoutBtn" class="bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-rose-200">Logout</button>
+        </div>
+
+        <form id="taskForm" class="flex gap-2 mb-6">
+            <input type="text" id="taskInput" placeholder="Write a new task item..." required class="flex-1 px-4 py-2 border rounded-lg focus:outline-blue-500">
+            <button type="submit" class="bg-blue-600 text-white px-5 py-2 rounded-lg font-medium hover:bg-blue-700">Add Task</button>
+        </form>
+
+        <ul id="taskList" class="divide-y divide-slate-100 border rounded-lg overflow-hidden"></ul>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:5000/api';
+        let userToken = localStorage.getItem('token') || '';
+        let socket;
+
+        const authContainer = document.getElementById('authContainer');
+        const appContainer = document.getElementById('appContainer');
+        const taskList = document.getElementById('taskList');
+
+        function toggleViews() {
+            if (userToken) {
+                authContainer.classList.add('hidden');
+                appContainer.classList.remove('hidden');
+                initApp();
+            } else {
+                authContainer.classList.remove('hidden');
+                appContainer.classList.add('hidden');
+                if(socket) socket.disconnect();
+            }
+        }
+
+        // Initialize App Operations
+        async function initApp() {
+            // Setup WebSockets
+            socket = io('http://localhost:5000');
+            socket.on('task_action', (data) => {
+                if (data.type === 'CREATE') appendTaskDOM(data.task);
+                if (data.type === 'UPDATE') updateTaskDOM(data.task);
+                if (data.type === 'DELETE') document.getElementById(`task-${data.id}`)?.remove();
+            });
+
+            // Initial Fetch
+            const res = await fetch(`${API_URL}/tasks`, { headers: { 'Authorization': userToken } });
+            const tasks = await res.json();
+            taskList.innerHTML = '';
+            tasks.forEach(appendTaskDOM);
+        }
+
+        // Auth Logic Handler
+        document.getElementById('authForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const res = await fetch(`${API_URL}/auth`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: e.target.email.value, password: e.target.password.value })
+            });
+            const data = await res.json();
+            if (data.token) {
+                userToken = data.token;
+                localStorage.setItem('token', userToken);
+                toggleViews();
+            }
+        });
+
+        // Task Creation Form Handler
+        document.getElementById('taskForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const input = document.getElementById('taskInput');
+            await fetch(`${API_URL}/tasks`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': userToken },
+                body: JSON.stringify({ title: input.value })
+            });
+            input.value = '';
+        });
+
+        // DOM Manipulators
+        function appendTaskDOM(task) {
+            if (document.getElementById(`task-${task.id}`)) return;
+            const li = document.createElement('li');
+            li.id = `task-${task.id}`;
+            li.className = `flex justify-between items-center p-4 hover:bg-slate-50 transition ${task.completed ? 'bg-emerald-50/50' : ''}`;
+            li.innerHTML = `
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" ${task.completed ? 'checked' : ''} onchange="toggleComplete('${task.id}', this.checked)" class="w-5 h-5 rounded text-blue-600">
+                    <span class="text-slate-700 ${task.completed ? 'line-through text-slate-400' : ''}">${task.title}</span>
+                </div>
+                <button onclick="deleteTask('${task.id}')" class="text-slate-400 hover:text-rose-600 transition">✕</button>
+            `;
+            taskList.appendChild(li);
+        }
+
+        function updateTaskDOM(task) {
+            const el = document.getElementById(`task-${task.id}`);
+            if (!el) return;
+            const checkbox = el.querySelector('input[type="checkbox"]');
+            const span = el.querySelector('span');
+            checkbox.checked = task.completed;
+            if (task.completed) {
+                el.classList.add('bg-emerald-50/50');
+                span.classList.add('line-through', 'text-slate-400');
+            } else {
+                el.classList.remove('bg-emerald-50/50');
+                span.classList.remove('line-through', 'text-slate-400');
+            }
+        }
+
+        async function toggleComplete(id, completed) {
+            await fetch(`${API_URL}/tasks/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'Authorization': userToken },
+                body: JSON.stringify({ completed })
+            });
+        }
+
+        async function deleteTask(id) {
+            await fetch(`${API_URL}/tasks/${id}`, { method: 'DELETE', headers: { 'Authorization': userToken } });
+        }
+
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            userToken = '';
+            localStorage.clear();
+            toggleViews();
+        });
+
+        // Initial Entry Verification
+        toggleViews();
+    </script>
+</body>
+</html>
